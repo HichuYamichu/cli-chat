@@ -2,13 +2,15 @@ package main
 
 import (
 	"bufio"
+	"encoding/gob"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"strings"
 )
+
+// REVERSE KEYS
 
 var (
 	allClients      = make(map[net.Conn]string)
@@ -24,8 +26,8 @@ type client struct {
 }
 
 type message struct {
-	author string
-	value  string
+	Author string
+	Value  string
 }
 
 var addr = flag.String("addr", "localhost:3000", "tcp service address")
@@ -36,16 +38,14 @@ func main() {
 
 	server, err := net.Listen("tcp", *addr)
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal(err)
 	}
 
 	go func() {
 		for {
 			conn, err := server.Accept()
 			if err != nil {
-				fmt.Println(err)
-				os.Exit(1)
+				log.Fatal(err)
 			}
 			reader := bufio.NewReader(conn)
 			name, err := reader.ReadString('\n')
@@ -63,11 +63,12 @@ func main() {
 			go func(conn net.Conn, clientName string) {
 				reader := bufio.NewReader(conn)
 				for {
-					incoming, err := reader.ReadString('\n')
+					msg, err := reader.ReadString('\n')
+					msg = strings.Replace(msg, "\n", "", 1)
 					if err != nil {
 						break
 					}
-					messages <- message{clientName, incoming}
+					messages <- message{clientName, msg}
 				}
 
 				deadConnections <- conn
@@ -75,16 +76,17 @@ func main() {
 			}(c.conn, allClients[c.conn])
 
 		case msg := <-messages:
-			fmt.Print(msg.value)
+			fmt.Print(msg.Value)
 			for conn, clientName := range allClients {
-				if clientName == msg.author {
+				if clientName == msg.Author {
 					continue
 				}
 				go func(conn net.Conn, msg message) {
-					m := fmt.Sprintf("<%s> %s", msg.author, msg.value)
-					_, err := conn.Write([]byte(m))
+					enc := gob.NewEncoder(conn)
+					err := enc.Encode(msg)
 					if err != nil {
 						deadConnections <- conn
+						log.Fatal(err)
 					}
 				}(conn, msg)
 			}
