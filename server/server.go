@@ -10,12 +10,10 @@ import (
 	"strings"
 )
 
-// REVERSE KEYS
-
 var (
-	allClients      = make(map[net.Conn]string)
+	allClients      = make(map[string]net.Conn)
 	newConnections  = make(chan client)
-	deadConnections = make(chan net.Conn)
+	deadConnections = make(chan client)
 	messages        = make(chan message)
 	setName         = make(chan string)
 )
@@ -58,42 +56,41 @@ func main() {
 	for {
 		select {
 		case c := <-newConnections:
-			allClients[c.conn] = c.name
+			fmt.Println("connected")
+			allClients[c.name] = c.conn
 
-			go func(conn net.Conn, clientName string) {
-				reader := bufio.NewReader(conn)
+			go func(c client) {
+				reader := bufio.NewReader(c.conn)
 				for {
 					msg, err := reader.ReadString('\n')
 					msg = strings.Replace(msg, "\n", "", 1)
+					msg = strings.Replace(msg, "\r", "", 1)
 					if err != nil {
 						break
 					}
-					messages <- message{clientName, msg}
+					messages <- message{c.name, msg}
 				}
 
-				deadConnections <- conn
+				deadConnections <- c
 
-			}(c.conn, allClients[c.conn])
+			}(c)
 
 		case msg := <-messages:
-			fmt.Print(msg.Value)
-			for conn, clientName := range allClients {
-				if clientName == msg.Author {
-					continue
-				}
-				go func(conn net.Conn, msg message) {
+			fmt.Println(msg.Value)
+			for clientName, conn := range allClients {
+				go func(conn net.Conn, clientName string, msg message) {
 					enc := gob.NewEncoder(conn)
 					err := enc.Encode(msg)
 					if err != nil {
-						deadConnections <- conn
+						deadConnections <- client{conn, clientName}
 						log.Fatal(err)
 					}
-				}(conn, msg)
+				}(conn, clientName, msg)
 			}
 
-		case conn := <-deadConnections:
-			log.Printf("Client %s disconnected", allClients[conn])
-			delete(allClients, conn)
+		case c := <-deadConnections:
+			log.Printf("Client %s disconnected", c.name)
+			delete(allClients, c.name)
 		}
 	}
 }
