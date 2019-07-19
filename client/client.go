@@ -2,12 +2,11 @@ package main
 
 import (
 	"bufio"
-	"encoding/gob"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"strings"
 
 	"github.com/jroimartin/gocui"
 )
@@ -56,16 +55,13 @@ func quit(g *gocui.Gui, v *gocui.View) error {
 func send(g *gocui.Gui, v *gocui.View) error {
 	typer, err := g.View("typer")
 	if err != nil {
-		log.Panicln(err)
+		return err
 	}
 	reader := bufio.NewReader(typer)
-	pattern := "<" + *name + "> "
-	fmt.Fprintln(typer, pattern)
 	text, _ := reader.ReadString('\n')
-	text = strings.Replace(text, pattern, "", 1)
 	_, err = conn.Write([]byte(text))
 	if err != nil {
-		log.Panicln(err)
+		return err
 	}
 	typer.Clear()
 	typer.SetCursor(0, 0)
@@ -73,22 +69,24 @@ func send(g *gocui.Gui, v *gocui.View) error {
 }
 
 func readConnection(conn net.Conn, g *gocui.Gui) {
-	var msg message
+	var jsonMsg []byte
+	msg := message{}
 	for {
-		dec := gob.NewDecoder(conn)
-		err := dec.Decode(&msg)
+		_, err := conn.Read(jsonMsg)
+		err = json.Unmarshal(jsonMsg, &msg)
 		if err != nil {
-			log.Fatal("decode error:", err)
+			fmt.Println("decode error:", err)
+			continue
 		}
 		g.Update(func(g *gocui.Gui) error {
 			chatBox, err := g.View("chatBox")
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			m := fmt.Sprintf("<%v> %v", msg.Author, msg.Value)
 			_, err = fmt.Fprintln(chatBox, m)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			return nil
 		})
@@ -101,7 +99,7 @@ func main() {
 
 	g, err := gocui.NewGui(gocui.OutputNormal)
 	if err != nil {
-		log.Panicln(err)
+		log.Fatal(err)
 	}
 	defer g.Close()
 
@@ -117,20 +115,20 @@ func main() {
 	}
 	_, err = conn.Write([]byte(*name + "\n"))
 	if err != nil {
-		fmt.Println("Error writing to stream.")
+		log.Fatal(err)
 	}
 
 	go readConnection(conn, g)
 
 	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
-		log.Panicln(err)
+		log.Fatal(err)
 	}
 
 	if err := g.SetKeybinding("", gocui.KeyEnter, gocui.ModNone, send); err != nil {
-		log.Panicln(err)
+		log.Fatal(err)
 	}
 
 	if err := g.MainLoop(); err != nil && err != gocui.ErrQuit {
-		log.Panicln(err)
+		log.Fatal(err)
 	}
 }
