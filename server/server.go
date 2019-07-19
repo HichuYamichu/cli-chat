@@ -8,8 +8,6 @@ import (
 	"log"
 	"net"
 	"strings"
-
-	"github.com/gomodule/redigo/redis"
 )
 
 var (
@@ -17,7 +15,6 @@ var (
 	newConnections  = make(chan client)
 	deadConnections = make(chan client)
 	messages        = make(chan message)
-	commands        = make(chan message)
 	setName         = make(chan string)
 )
 
@@ -37,12 +34,6 @@ func main() {
 	flag.Parse()
 	log.SetFlags(0)
 
-	c, err := redis.Dial("tcp", "172.20.88.87:6379")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer c.Close()
-
 	server, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)
@@ -52,13 +43,19 @@ func main() {
 		for {
 			conn, err := server.Accept()
 			if err != nil {
-				log.Fatal(err)
+				continue
 			}
-			reader := bufio.NewReader(conn)
-			name, err := reader.ReadString('\n')
-			name = strings.TrimSuffix(name, "\n")
-			clientConn := client{conn, name}
-			newConnections <- clientConn
+			go func(conn net.Conn) {
+				reader := bufio.NewReader(conn)
+				name, err := reader.ReadString('\n')
+				if err != nil {
+					conn.Close()
+					return
+				}
+				name = strings.TrimSuffix(name, "\n")
+				clientConn := client{conn, name}
+				newConnections <- clientConn
+			}(conn)
 		}
 	}()
 
@@ -77,11 +74,7 @@ func main() {
 					if err != nil {
 						break
 					}
-					if strings.HasPrefix(msg, "/") {
-						commands <- message{c.name, msg}
-					} else {
-						messages <- message{c.name, msg}
-					}
+					messages <- message{c.name, msg}
 				}
 
 				deadConnections <- c
@@ -90,49 +83,19 @@ func main() {
 
 		case msg := <-messages:
 			fmt.Println(msg.Value)
-			jsonMsg, err := json.Marshal(msg)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-			_, err = c.Do("RPUSH", "messages", jsonMsg)
-			if err != nil {
-				log.Fatal(err)
-			}
 			for clientName, conn := range allClients {
-				go func(conn net.Conn, clientName string, jsonMsg []byte) {
-					conn.Write(jsonMsg)
+				go func(conn net.Conn, clientName string, msg message) {
+					enc := json.NewEncoder(conn)
+					err := enc.Encode(msg)
 					if err != nil {
 						deadConnections <- client{conn, clientName}
 						log.Fatal(err)
 					}
-				}(conn, clientName, jsonMsg)
+				}(conn, clientName, msg)
 			}
-		case cmd := <-commands:
-			if strings.HasPrefix(cmd.Value, "/fetch") {
-				fmt.Println(cmd.Value)
-				arg := strings.Replace(cmd.Value, "/fetch ", "", 1)
-				res, err := redis.ByteSlices(c.Do("LRANGE", "messages", "-"+arg, -1))
-
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				for _, jsonMsg := range res {
-					allClients[cmd.Author].Write(jsonMsg)
-					// msg := message{}
-					// err = json.Unmarshal([]byte(stringMsg), &msg)
-					// enc := gob.NewEncoder(allClients[cmd.Author])
-					// err := enc.Encode(msg)
-
-					if err != nil {
-						deadConnections <- client{allClients[cmd.Author], cmd.Author}
-						log.Fatal(err)
-					}
-
-				}
+			if err != nil {
+				log.Fatal(err)
 			}
-
 		case c := <-deadConnections:
 			log.Printf("Client %s disconnected", c.name)
 			delete(allClients, c.name)

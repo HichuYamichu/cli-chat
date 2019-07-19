@@ -48,6 +48,15 @@ func layout(g *gocui.Gui) error {
 	return nil
 }
 
+func up(g *gocui.Gui, v *gocui.View) error {
+	typer, err := g.View("chatBox")
+	if err != nil {
+		return err
+	}
+	typer.SetCursor(0, 1)
+	return nil
+}
+
 func quit(g *gocui.Gui, v *gocui.View) error {
 	return gocui.ErrQuit
 }
@@ -69,15 +78,11 @@ func send(g *gocui.Gui, v *gocui.View) error {
 }
 
 func readConnection(conn net.Conn, g *gocui.Gui) {
-	var jsonMsg []byte
-	msg := message{}
+	dec := json.NewDecoder(conn)
+	var msg message
 	for {
-		_, err := conn.Read(jsonMsg)
-		err = json.Unmarshal(jsonMsg, &msg)
-		if err != nil {
-			fmt.Println("decode error:", err)
-			continue
-		}
+		dec.Decode(&msg)
+
 		g.Update(func(g *gocui.Gui) error {
 			chatBox, err := g.View("chatBox")
 			if err != nil {
@@ -125,6 +130,10 @@ func main() {
 	}
 
 	if err := g.SetKeybinding("", gocui.KeyEnter, gocui.ModNone, send); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := g.SetKeybinding("", gocui.KeyArrowUp, gocui.ModNone, up); err != nil {
 		log.Fatal(err)
 	}
 
